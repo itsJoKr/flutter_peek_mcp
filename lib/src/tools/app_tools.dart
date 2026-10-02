@@ -33,6 +33,7 @@ ToolDef isAppConnectedTool(VmClient vm) => ToolDef(
         }
         return {
           'connected': vm.isConnected,
+          'nowMs': DateTime.now().millisecondsSinceEpoch,
           if (vm.connectedUri != null) 'vmServiceUri': vm.connectedUri,
           'uriSource': vm.uriSource,
           'bufferedLogs': vm.logs.length,
@@ -110,12 +111,14 @@ ToolDef contextAroundTool(VmClient vm, NoiseFilter noise) => ToolDef(
             'default': 10000,
             'description': 'Half-width of the window on each side',
           },
+          'limit': {'type': 'integer', 'default': 200, 'maximum': 500},
           'includeNoise': {'type': 'boolean', 'default': false},
         },
       },
       handler: (args) async {
         final warning = await connectOrWarn(vm);
         final centerMs = _centerOf(vm, args);
+        final limit = (asInt(args['limit']) ?? 200).clamp(1, 500);
         final windowMs = asInt(args['windowMs']) ?? 10000;
         final includeNoise = args['includeNoise'] as bool? ?? false;
         final window = {
@@ -124,23 +127,41 @@ ToolDef contextAroundTool(VmClient vm, NoiseFilter noise) => ToolDef(
           'includeNoise': includeNoise,
         };
 
-        final items = [
+        final all = [
           for (final log in filterLogs(vm.logs, window))
             {'kind': 'log', ...log.toPreview()},
           for (final request in filterHttp(vm.httpRequests, window, noise))
             {'kind': 'http', ...request.toPreview()},
-        ]..sort(
-            (a, b) => (a['timestamp'] as int).compareTo(b['timestamp'] as int));
+        ];
+        final items = _closestInTimeOrder(all, centerMs, limit);
 
         return {
           if (warning != null) 'warning': warning,
           'centerMs': centerMs,
           'windowMs': windowMs,
+          'total': all.length,
           'returned': items.length,
           'items': items,
         };
       },
     );
+
+/// The [limit] items closest to [centerMs], sorted by time.
+List<Map<String, dynamic>> _closestInTimeOrder(
+  List<Map<String, dynamic>> items,
+  int centerMs,
+  int limit,
+) {
+  final closest = (List.of(items)
+        ..sort((a, b) => (_timestampOf(a) - centerMs)
+            .abs()
+            .compareTo((_timestampOf(b) - centerMs).abs())))
+      .take(limit)
+      .toList();
+  return closest..sort((a, b) => _timestampOf(a).compareTo(_timestampOf(b)));
+}
+
+int _timestampOf(Map<String, dynamic> item) => item['timestamp'] as int;
 
 int _centerOf(VmClient vm, Map<String, dynamic> args) {
   final timestamp = asInt(args['timestampMs']);

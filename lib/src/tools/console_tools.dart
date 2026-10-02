@@ -49,6 +49,7 @@ ToolDef listConsoleLogsTool(VmClient vm) => ToolDef(
         final page = filtered.skip(offset).take(limit).toList();
         return {
           if (warning != null) 'warning': warning,
+          'nowMs': DateTime.now().millisecondsSinceEpoch,
           'total': filtered.length,
           'returned': page.length,
           'offset': offset,
@@ -59,9 +60,9 @@ ToolDef listConsoleLogsTool(VmClient vm) => ToolDef(
 
 ToolDef getConsoleLogTool(VmClient vm) => ToolDef(
       name: 'get_console_log',
-      description:
-          'Get the full text of one console entry by id, plus the entries '
-          'before and after it. Useful for stack traces.',
+      description: 'Get the full text of one console entry by id (up to 20,000 '
+          'characters), plus previews of the entries before and after it. '
+          'Useful for stack traces.',
       inputSchema: {
         'type': 'object',
         'properties': {
@@ -81,8 +82,11 @@ ToolDef getConsoleLogTool(VmClient vm) => ToolDef(
         final radius = (asInt(args['contextLines']) ?? 5).clamp(0, 50);
         return {
           if (warning != null) 'warning': warning,
-          'entry': vm.logs[index].toFull(),
-          'context': [for (final e in vm.logsAround(index, radius)) e.toFull()],
+          'entry': vm.logs[index].toPreview(textCap: 20000),
+          'context': [
+            for (final e in vm.logsAround(index, radius))
+              e.toPreview(textCap: 300),
+          ],
         };
       },
     );
@@ -91,7 +95,8 @@ ToolDef searchConsoleLogsTool(VmClient vm) => ToolDef(
       name: 'search_console_logs',
       description:
           'grep-style search of buffered console output (case-insensitive), '
-          'newest first. Each match comes with a few surrounding entries.',
+          'newest first. Each match comes with a few surrounding entries. '
+          'Long text is truncated; open an entry with get_console_log.',
       inputSchema: {
         'type': 'object',
         'properties': {
@@ -125,8 +130,11 @@ ToolDef searchConsoleLogsTool(VmClient vm) => ToolDef(
         for (var i = logs.length - 1; i >= 0 && hits.length < limit; i--) {
           if (!pattern.hasMatch(logs[i].text)) continue;
           hits.add({
-            'match': logs[i].toFull(),
-            'context': [for (final e in vm.logsAround(i, radius)) e.toFull()],
+            'match': logs[i].toPreview(textCap: 1000),
+            'context': [
+              for (final e in vm.logsAround(i, radius))
+                if (e != logs[i]) e.toPreview(),
+            ],
           });
         }
         return {

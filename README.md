@@ -171,8 +171,17 @@ Design choices:
 - **Bodies only on request.** List and search tools return metadata and short
   snippets. Bodies come only from `get_*` tools, and the bulk tool requires a
   filter. This keeps the agent's context small.
-- **Bodies are capped at about 50 KB** on each side. JSON is pretty-printed.
-  Binary bodies are shown as a byte count.
+- **Responses stay small.** `get_http_request` returns up to 20,000
+  characters of each body. You can read the rest with `bodyOffset`. The bulk
+  tool returns 2,000 characters for each body. A complete JSON body is
+  returned as JSON, not as an escaped string. Binary bodies are shown as a
+  byte count.
+- **Images and other binary downloads are not prefetched.** Their bodies
+  (and all bodies larger than 1 MB) are fetched only when a tool asks for
+  them. This keeps apps with many `Image.network` calls fast.
+- **Breakpoints do not block the agent.** While the app is paused in the
+  debugger, tools still answer from the buffers. Bodies that were not fetched
+  yet stay empty until the app runs again.
 - **Background traffic is hidden** from HTTP tools by default: Sentry, Google
   Analytics, Firebase telemetry, `/health`, `/ping`, and similar. Pass
   `includeNoise: true` to show it, or add your own patterns with `--noise`.
@@ -197,8 +206,8 @@ For details, see the
 [DevTools Network view documentation](https://docs.flutter.dev/tools/devtools/network).
 
 **Requests made at startup:** the profiler records requests only after it is
-turned on. The server turns it on when it connects, usually less than a
-second after the app starts. To also capture the first requests, turn it on
+turned on. The server turns it on when it connects, usually one or two
+seconds after the app starts. To also capture the first requests, turn it on
 yourself in debug builds:
 
 ```dart
@@ -222,6 +231,15 @@ to the model provider. Keep this in mind:
   To turn this off, pass `--no-redact-headers`.
 - Request and response **bodies are not redacted**. If your app handles
   personal or sensitive data, use test accounts and test data.
+- Logs and response bodies are **untrusted input** for the agent. A server
+  response can contain text that looks like instructions. The server tells the
+  agent to treat this content as data, but you should still review what the
+  agent does after it reads them.
+
+While the HTTP profiler is on, the app keeps every request and its body in
+memory, the same as when the DevTools Network tab records. This is not a
+problem in normal debug sessions. In a very long session with many large
+downloads, restart the app from time to time.
 
 ## Options
 

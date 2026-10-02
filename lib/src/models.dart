@@ -34,14 +34,6 @@ class LogEntry {
       if (truncated) 'truncated': true,
     };
   }
-
-  Map<String, dynamic> toFull() => {
-        'id': id,
-        'timestamp': timestamp.millisecondsSinceEpoch,
-        'source': source,
-        'level': level,
-        'text': text,
-      };
 }
 
 /// Guesses a level from the text of a plain stdout line.
@@ -129,6 +121,12 @@ class HttpEntry {
     );
   }
 
+  /// Media type of the response, without parameters (`application/json`).
+  String? get contentType {
+    final value = _contentType(responseHeaders);
+    return value.isEmpty ? null : value.split(';').first.trim();
+  }
+
   Map<String, dynamic> toPreview() => {
         'id': id,
         'timestamp': timestamp.millisecondsSinceEpoch,
@@ -136,15 +134,17 @@ class HttpEntry {
         'url': url,
         'status': statusCode,
         'durationMs': durationMs,
+        if (contentType != null) 'contentType': contentType,
         'requestBytes': requestBytes,
         'responseBytes': responseBytes,
         'completed': completed,
         if (error != null) 'error': error,
       };
 
-  Map<String, dynamic> toDetail({int bodyCap = 50000}) {
-    final req = _capBody(requestBody, bodyCap);
-    final resp = _capBody(responseBody, bodyCap);
+  /// Full details. Each body is cut to [maxBodyChars] characters starting at
+  /// [bodyOffset]; a complete JSON body is returned as JSON, not as a string.
+  Map<String, dynamic> toDetail(
+      {int maxBodyChars = 20000, int bodyOffset = 0}) {
     return {
       'id': id,
       'timestamp': timestamp.millisecondsSinceEpoch,
@@ -152,31 +152,49 @@ class HttpEntry {
       'url': url,
       'status': statusCode,
       'durationMs': durationMs,
+      if (error != null) 'error': error,
       'requestHeaders': requestHeaders,
-      'requestBody': _pretty(req.text, requestHeaders),
-      if (req.truncated) 'requestBodyTruncated': true,
+      ..._bodyFields(
+          'request', requestBody, requestHeaders, maxBodyChars, bodyOffset),
       'requestBytes': requestBytes,
       'responseHeaders': responseHeaders,
-      'responseBody': _pretty(resp.text, responseHeaders),
-      if (resp.truncated) 'responseBodyTruncated': true,
+      ..._bodyFields(
+          'response', responseBody, responseHeaders, maxBodyChars, bodyOffset),
       'responseBytes': responseBytes,
       'completed': completed,
-      if (error != null) 'error': error,
     };
   }
 }
 
-({String? text, bool truncated}) _capBody(String? body, int cap) {
-  if (body == null) return (text: null, truncated: false);
-  if (body.length <= cap) return (text: body, truncated: false);
-  return (text: '${body.substring(0, cap)}…[TRUNCATED]', truncated: true);
+Map<String, dynamic> _bodyFields(
+  String prefix,
+  String? body,
+  Map<String, dynamic> headers,
+  int maxChars,
+  int offset,
+) {
+  if (body == null) return {'${prefix}Body': null};
+  final start = offset.clamp(0, body.length);
+  final end = (start + maxChars).clamp(start, body.length);
+  final whole = start == 0 && end == body.length;
+  return {
+    '${prefix}Body':
+        whole ? _jsonOrText(body, headers) : body.substring(start, end),
+    if (!whole)
+      '${prefix}BodyRange': {
+        'offset': start,
+        'returnedChars': end - start,
+        'totalChars': body.length,
+      },
+  };
 }
 
-String? _pretty(String? body, Map<String, dynamic> headers) {
-  if (body == null || body.isEmpty) return body;
-  if (!_contentType(headers).contains('json')) return body;
+/// Decoded JSON when the body is JSON, so it isn't escaped twice in the tool
+/// response; the raw text otherwise.
+Object _jsonOrText(String body, Map<String, dynamic> headers) {
+  if (body.isEmpty || !_contentType(headers).contains('json')) return body;
   try {
-    return const JsonEncoder.withIndent('  ').convert(jsonDecode(body));
+    return jsonDecode(body) ?? body;
   } on FormatException {
     return body;
   }

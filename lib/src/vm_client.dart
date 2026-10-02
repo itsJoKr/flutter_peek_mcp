@@ -14,6 +14,24 @@ const _kEnableHttpLogging = 'ext.dart.io.httpEnableTimelineLogging';
 const _kGetHttpProfile = 'ext.dart.io.getHttpProfile';
 const _kGetHttpProfileRequest = 'ext.dart.io.getHttpProfileRequest';
 
+/// Service extensions run on the app's event loop, so they never answer while
+/// the app is paused at a breakpoint.
+const _rpcTimeout = Duration(seconds: 5);
+
+/// Bodies that are only fetched when a tool asks for them, because they are
+/// big and useless as text (for example, every `Image.network` download).
+const _binaryContentTypes = [
+  'image/',
+  'audio/',
+  'video/',
+  'font/',
+  'application/octet-stream',
+  'application/pdf',
+  'application/zip',
+  'application/gzip',
+];
+const _maxPrefetchBytes = 1024 * 1024;
+
 class VmConnectionException implements Exception {
   final String message;
   VmConnectionException(this.message);
@@ -47,7 +65,7 @@ class VmClient {
     this.maxLogs = 2000,
     this.maxHttp = 500,
     this.httpPollInterval = const Duration(milliseconds: 1500),
-    this.reconnectInterval = const Duration(seconds: 3),
+    this.reconnectInterval = const Duration(seconds: 1),
   });
 
   VmService? _service;
@@ -65,10 +83,12 @@ class VmClient {
 
   final List<LogEntry> _logs = [];
   final LinkedHashSet<String> _seenEvents = LinkedHashSet();
+  final Map<String, int> _occurrences = {};
   int _logIdCounter = 0;
 
   final Map<String, HttpEntry> _http = {};
   final Map<String, String> _idsByProfileId = {};
+  String? _httpSessionIsolateId;
   final LinkedHashSet<String> _pendingBodies = LinkedHashSet();
   int _httpIdCounter = 0;
   int? _updatedSinceMicros;
@@ -157,7 +177,7 @@ class VmClient {
     }
   }
 
-  /// Fetches the bodies of [id] now if the background poll hasn't yet.
+  /// Fetches the bodies of [id] now if they haven't been fetched yet.
   Future<HttpEntry?> loadBodies(String id) async {
     if (_pendingBodies.contains(id) && isConnected) {
       await _fetchBodies(id, _isolateId!);
@@ -188,6 +208,7 @@ class VmClient {
     }
     _service = service;
     _connectedUri = wsUri;
+    _occurrences.clear();
 
     try {
       _subscriptions.addAll([
@@ -240,7 +261,8 @@ class VmClient {
   Future<void> _adoptMainIsolate() async {
     final service = _service;
     if (service == null) return;
-    final isolates = (await service.getVM()).isolates ?? const <IsolateRef>[];
+    final vm = await service.getVM().timeout(_rpcTimeout);
+    final isolates = vm.isolates ?? const <IsolateRef>[];
     if (isolates.isEmpty) {
       throw VmConnectionException(
         'Connected, but the app has no running isolate. Is it restarting?',
@@ -255,16 +277,15 @@ class VmClient {
       (isolate.name ?? '').toLowerCase().contains('main');
 
   Future<void> _useIsolate(String isolateId) async {
-    if (_isolateId != isolateId) {
-      _isolateId = isolateId;
-      _startHttpSession();
+    _isolateId = isolateId;
+    if (_httpSessionIsolateId != isolateId) {
+      _httpSessionIsolateId = isolateId;
+      _idsByProfileId.clear();
+      _pendingBodies.clear();
+      _updatedSinceMicros = null;
     }
     try {
-      await _service?.callServiceExtension(
-        _kEnableHttpLogging,
-        isolateId: isolateId,
-        args: {'enabled': 'true'},
-      );
+      await _callExtension(_kEnableHttpLogging, isolateId, {'enabled': 'true'});
     } catch (e) {
       // dart:io registers its extensions slightly after the isolate starts;
       // the ServiceExtensionAdded event retries this.
@@ -272,12 +293,16 @@ class VmClient {
     }
   }
 
-  /// Profile ids are only meaningful inside the isolate that produced them,
-  /// so a new isolate starts a fresh id mapping.
-  void _startHttpSession() {
-    _idsByProfileId.clear();
-    _pendingBodies.clear();
-    _updatedSinceMicros = null;
+  Future<Response> _callExtension(
+    String method,
+    String isolateId,
+    Map<String, dynamic> args,
+  ) {
+    final service = _service;
+    if (service == null) throw VmConnectionException('Not connected.');
+    return service
+        .callServiceExtension(method, isolateId: isolateId, args: args)
+        .timeout(_rpcTimeout);
   }
 
   void _onIsolateEvent(Event event) {
@@ -404,10 +429,12 @@ class VmClient {
     }
     final target = ref.kind == InstanceKind.kString
         ? ref
-        : await service.invoke(isolateId, ref.id!, 'toString', const []);
+        : await service.invoke(
+            isolateId, ref.id!, 'toString', const []).timeout(_rpcTimeout);
     if (target is! InstanceRef) return _previewOf(ref);
     if (target.valueAsStringIsTruncated != true) return target.valueAsString;
-    final full = await service.getObject(isolateId, target.id!);
+    final full =
+        await service.getObject(isolateId, target.id!).timeout(_rpcTimeout);
     return full is Instance ? full.valueAsString : target.valueAsString;
   }
 
@@ -416,9 +443,13 @@ class VmClient {
       : DateTime.now();
 
   /// DDS replays its event history to every new connection, so a reconnect to
-  /// the same app would otherwise duplicate the whole console.
+  /// the same app would otherwise duplicate the whole console. Identical
+  /// events in the same millisecond are told apart by how often they've been
+  /// seen on this connection; a replay repeats the same sequence.
   bool _markSeen(String key) {
-    if (!_seenEvents.add(key)) return false;
+    if (_occurrences.length > maxLogs * 10) _occurrences.clear();
+    final n = _occurrences.update(key, (n) => n + 1, ifAbsent: () => 0);
+    if (!_seenEvents.add('$key#$n')) return false;
     if (_seenEvents.length > maxLogs * 10) {
       _seenEvents.remove(_seenEvents.first);
     }
@@ -440,6 +471,8 @@ class VmClient {
     _polling = true;
     try {
       await _pollHttp();
+    } on TimeoutException {
+      _log('the app is not responding (paused at a breakpoint?)');
     } catch (e) {
       // Usually the isolate died in a hot restart; ensureConnected re-resolves it.
       _log('HTTP poll failed: $e');
@@ -455,10 +488,10 @@ class VmClient {
     if (service == null || isolateId == null) return;
 
     final since = _updatedSinceMicros;
-    final response = await service.callServiceExtension(
+    final response = await _callExtension(
       _kGetHttpProfile,
-      isolateId: isolateId,
-      args: {if (since != null) 'updatedSince': '$since'},
+      isolateId,
+      {if (since != null) 'updatedSince': '$since'},
     );
     if (isolateId != _isolateId) return;
 
@@ -475,7 +508,8 @@ class VmClient {
     }
     _evictOldHttp();
 
-    final newestFirst = _pendingBodies.toList().reversed.take(25);
+    final newestFirst =
+        _pendingBodies.toList().reversed.where(_shouldPrefetch).take(25);
     for (final id in newestFirst) {
       await _fetchBodies(id, isolateId);
     }
@@ -533,17 +567,27 @@ class VmClient {
     }
   }
 
+  bool _shouldPrefetch(String id) {
+    final entry = _http[id];
+    if (entry == null) return false;
+    if (entry.requestBytes > _maxPrefetchBytes ||
+        entry.responseBytes > _maxPrefetchBytes) {
+      return false;
+    }
+    final type = entry.contentType ?? '';
+    return !_binaryContentTypes.any(type.startsWith);
+  }
+
   Future<void> _fetchBodies(String id, String isolateId) async {
-    final service = _service;
     final entry = _http[id];
     _pendingBodies.remove(id);
-    if (service == null || entry == null) return;
+    if (_service == null || entry == null) return;
 
     try {
-      final response = await service.callServiceExtension(
+      final response = await _callExtension(
         _kGetHttpProfileRequest,
-        isolateId: isolateId,
-        args: {'id': entry.profileId},
+        isolateId,
+        {'id': entry.profileId},
       );
       final json = response.json;
       final current = _http[id];
@@ -558,6 +602,8 @@ class VmClient {
         responseBytes:
             current.responseBytes == 0 ? responseBytes?.length : null,
       );
+    } on TimeoutException {
+      _pendingBodies.add(id);
     } catch (e) {
       _log('could not fetch bodies of HTTP request $id: $e');
     }
@@ -611,7 +657,6 @@ class VmClient {
     _service = null;
     _isolateId = null;
     _connectedUri = null;
-    _startHttpSession();
     try {
       await service?.dispose();
     } catch (_) {

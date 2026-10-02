@@ -62,6 +62,7 @@ ToolDef listHttpRequestsTool(VmClient vm, NoiseFilter noise) => ToolDef(
         final page = filtered.skip(offset).take(limit).toList();
         return {
           if (warning != null) 'warning': warning,
+          'nowMs': DateTime.now().millisecondsSinceEpoch,
           'total': filtered.length,
           'returned': page.length,
           'offset': offset,
@@ -74,12 +75,24 @@ ToolDef getHttpRequestTool(VmClient vm) => ToolDef(
       name: 'get_http_request',
       description:
           'Get one HTTP request by id with full request and response headers '
-          'and bodies. Bodies are capped at about 50 KB each, and JSON is '
-          'pretty-printed.',
+          'and bodies. A complete JSON body is returned as JSON. A body longer '
+          'than maxBodyChars is cut, and its *BodyRange field tells you how to '
+          'read the rest with bodyOffset.',
       inputSchema: {
         'type': 'object',
         'properties': {
           'id': {'type': 'string'},
+          'maxBodyChars': {
+            'type': 'integer',
+            'default': 20000,
+            'maximum': 100000,
+            'description': 'Characters returned per body',
+          },
+          'bodyOffset': {
+            'type': 'integer',
+            'default': 0,
+            'description': 'Start of the returned part of each body',
+          },
         },
         'required': ['id'],
       },
@@ -93,7 +106,11 @@ ToolDef getHttpRequestTool(VmClient vm) => ToolDef(
         }
         return {
           if (warning != null) 'warning': warning,
-          ...entry.toDetail(),
+          ...entry.toDetail(
+            maxBodyChars:
+                (asInt(args['maxBodyChars']) ?? 20000).clamp(1, 100000),
+            bodyOffset: asInt(args['bodyOffset']) ?? 0,
+          ),
         };
       },
     );
@@ -104,12 +121,19 @@ ToolDef getHttpRequestsWithBodiesTool(VmClient vm, NoiseFilter noise) =>
       description:
           'Get full details, with bodies, of up to 10 HTTP requests that match '
           'a filter. At least one filter is required, so the whole buffer is '
-          'never dumped.',
+          'never dumped. Bodies are cut to maxBodyChars each; use '
+          'get_http_request to read one in full.',
       inputSchema: {
         'type': 'object',
         'properties': {
           ..._filterProperties,
-          'limit': {'type': 'integer', 'default': 10, 'maximum': 10},
+          'limit': {'type': 'integer', 'default': 5, 'maximum': 10},
+          'maxBodyChars': {
+            'type': 'integer',
+            'default': 2000,
+            'maximum': 20000,
+            'description': 'Characters returned per body',
+          },
           'order': _orderProperty,
           'includeNoise': _includeNoiseProperty,
         },
@@ -128,10 +152,13 @@ ToolDef getHttpRequestsWithBodiesTool(VmClient vm, NoiseFilter noise) =>
         final warning = await connectOrWarn(vm);
         final filtered = filterHttp(vm.httpRequests, args, noise);
         sortByTime(filtered, _timeOf, args['order'] as String?);
-        final limit = (asInt(args['limit']) ?? 10).clamp(1, 10);
+        final limit = (asInt(args['limit']) ?? 5).clamp(1, 10);
+        final maxBodyChars =
+            (asInt(args['maxBodyChars']) ?? 2000).clamp(1, 20000);
         final items = <Map<String, dynamic>>[];
         for (final entry in filtered.take(limit)) {
-          items.add((await vm.loadBodies(entry.id) ?? entry).toDetail());
+          final loaded = await vm.loadBodies(entry.id) ?? entry;
+          items.add(loaded.toDetail(maxBodyChars: maxBodyChars));
         }
         return {
           if (warning != null) 'warning': warning,
@@ -238,6 +265,7 @@ ToolDef httpSummaryTool(VmClient vm, NoiseFilter noise) => ToolDef(
 
         return {
           if (warning != null) 'warning': warning,
+          'nowMs': DateTime.now().millisecondsSinceEpoch,
           'total': entries.length,
           'byStatusFamily': byStatusFamily,
           'byMethod': byMethod,

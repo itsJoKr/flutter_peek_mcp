@@ -10,3 +10,5 @@
   given to the `connect` tool. Reconnects after hot and full restarts.
 - Keeps buffered data after the app disconnects.
 - Redacts credential headers by default.
+- Keeps tool responses below MCP output limits. Long bodies can be read in
+  parts, and binary bodies are fetched only on demand.
