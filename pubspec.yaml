@@ -1,0 +1,26 @@
+name: flutter_peek_mcp
+description: >-
+  MCP server that lets AI coding agents read a running Flutter app's console
+  logs and HTTP traffic through the Dart VM service.
+version: 0.1.0
+repository: https://github.com/itsJoKr/flutter_peek_mcp
+issue_tracker: https://github.com/itsJoKr/flutter_peek_mcp/issues
+topics:
+  - mcp
+  - flutter
+  - debugging
+  - devtools
+
+environment:
+  sdk: ^3.5.0
+
+executables:
+  flutter_peek_mcp:
+
+dependencies:
+  args: ^2.5.0
+  vm_service: ">=15.0.0 <17.0.0"
+
+dev_dependencies:
+  lints: ^5.0.0
+  test: ^1.25.0
