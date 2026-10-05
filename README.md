@@ -1,4 +1,4 @@
-# flutter_peek_mcp
+# <img src="https://raw.githubusercontent.com/itsJoKr/flutter_peek_mcp/main/doc/logo.png" alt="" width="44" align="absmiddle"> flutter_peek_mcp
 
 An [MCP](https://modelcontextprotocol.io) server that lets AI coding agents
 (Claude Code, Cursor, Codex, …) read the **console output** and **HTTP
@@ -498,3 +498,9 @@ Issues and pull requests are welcome.
 ## License
 
 [MIT](LICENSE)
+
+---
+
+Maintained by: contact@joe-it-solutions.com
+
+![Joe IT Solutions](https://github.com/itsJoKr/debounced_text_form_field/assets/11093480/abf1e009-2d4b-44b0-a8a2-49541f8291f5)
