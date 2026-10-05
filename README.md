@@ -26,7 +26,7 @@ copying and pasting logs:
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/itsJoKr/flutter_peek_mcp/main/doc/architecture-dark.svg">
-  <img alt="The Flutter app writes console output and HTTP traffic to the Dart VM service. flutter_peek_mcp reads the Stdout, Stderr and Logging streams and the HTTP profile into buffers, and serves them to the AI agent as MCP tools over stdio. It finds the app through the VM service URI file that flutter run writes." src="https://raw.githubusercontent.com/itsJoKr/flutter_peek_mcp/main/doc/architecture-light.svg">
+  <img alt="The Flutter app sends console output and HTTP traffic through the Dart VM service to flutter_peek_mcp, which serves them to the AI agent over MCP (stdio)." src="https://raw.githubusercontent.com/itsJoKr/flutter_peek_mcp/main/doc/architecture-light.svg">
 </picture>
 
 1. `flutter run --vmservice-out-file=<file>` writes the VM service URI of the
