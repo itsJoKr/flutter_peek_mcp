@@ -32,6 +32,8 @@ const _binaryContentTypes = [
 ];
 const _maxPrefetchBytes = 1024 * 1024;
 
+/// The app's VM service can't be found or reached. The message says why and
+/// how to fix it.
 class VmConnectionException implements Exception {
   final String message;
   VmConnectionException(this.message);

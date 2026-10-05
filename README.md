@@ -53,7 +53,8 @@ does two things in the app: it turns on the HTTP profiler, and it calls
 
 ## Requirements
 
-- Dart SDK 3.5 or later (included with Flutter 3.24 or later).
+- Dart SDK 3.10 or later for `dart install` (Flutter 3.38 or later). With Dart
+  3.5 to 3.9, install with `dart pub global activate` instead.
 - The app must run in **debug** or **profile** mode. Release builds have no VM
   service.
 - Android, iOS, macOS, Windows and Linux. Emulators, simulators and physical
@@ -66,15 +67,20 @@ does two things in the app: it turns on the HTTP profiler, and it calls
 ### 1. Install
 
 ```bash
-dart pub global activate --source git https://github.com/itsJoKr/flutter_peek_mcp
+dart install flutter_peek_mcp
 ```
 
-This installs the `flutter_peek_mcp` executable in `~/.pub-cache/bin`. Make
-sure that directory is on your `PATH`. If you use FVM, run
-`fvm dart pub global activate …` instead.
+`dart install` compiles the server to a native executable, so it starts fast
+and does not depend on your Dart SDK version. It prints the folder that it
+put the executable in. If that folder is not on your `PATH`, add it, as the
+command tells you. If you use FVM, run `fvm dart install flutter_peek_mcp`.
 
-To update, run the same command again. To pin a version, add
-`--git-ref=<tag or commit>`.
+- To update, run the same command again.
+- To install a specific version: `dart install flutter_peek_mcp 0.1.0`.
+- To install the latest code from GitHub:
+  `dart install https://github.com/itsJoKr/flutter_peek_mcp.git`.
+- With Dart 3.5 to 3.9: `dart pub global activate flutter_peek_mcp`. This puts
+  the executable in `~/.pub-cache/bin`.
 
 <details>
 <summary>Alternative: run from a clone</summary>
@@ -453,8 +459,9 @@ Restart the app with the flag, or ask the agent to `connect` to the URI that
 `flutter run` printed.
 
 **`flutter_peek_mcp: command not found` when the agent starts the server**:
-agents often start servers without your shell `PATH`. Use the full path
-(`~/.pub-cache/bin/flutter_peek_mcp`) as the command.
+agents often start servers without your shell `PATH`. Use the full path of
+the executable as the command. To find it, run `which flutter_peek_mcp` in
+your terminal.
 
 **No HTTP requests**: check that the client is in the
 [client table](#http), that the app runs in debug or profile mode, and that

@@ -2,8 +2,12 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
+/// Runs a tool with its arguments. The result is sent to the client as text:
+/// a [String] as is, anything else as JSON.
 typedef ToolHandler = Future<Object?> Function(Map<String, dynamic> args);
 
+/// An MCP tool: its name, its description and input schema for the agent,
+/// and the [handler] that runs it.
 class ToolDef {
   final String name;
   final String description;
