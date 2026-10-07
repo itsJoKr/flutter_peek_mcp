@@ -69,7 +69,7 @@ put the executable in. If that folder is not on your `PATH`, add it, as the
 command tells you. If you use FVM, run `fvm dart install flutter_peek_mcp`.
 
 - To update, run the same command again.
-- To install a specific version: `dart install flutter_peek_mcp 0.1.0`.
+- To install a specific version: `dart install flutter_peek_mcp 1.0.0`.
 - To install the latest code from GitHub:
   `dart install https://github.com/itsJoKr/flutter_peek_mcp.git`.
 - With Dart 3.5 to 3.9: `dart pub global activate flutter_peek_mcp`. This puts

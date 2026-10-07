@@ -1,4 +1,4 @@
-## 0.1.0
+## 1.0.0
 
 - First public release.
 - Tools for console logs (`list_console_logs`, `get_console_log`,
