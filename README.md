@@ -29,11 +29,14 @@ copying and pasting logs:
   <img alt="The Flutter app sends console output and HTTP traffic through the Dart VM service to flutter_peek_mcp, which serves them to the AI agent over MCP (stdio)." src="https://raw.githubusercontent.com/itsJoKr/flutter_peek_mcp/main/doc/architecture-light.svg">
 </picture>
 
-1. `flutter run --vmservice-out-file=<file>` writes the VM service URI of the
+1. You start the app with `flutter run`. With Flutter 3.44 or later,
+   `flutter run` starts a Dart Tooling Daemon, which lists the app. With
+   `--vmservice-out-file=<file>`, it also writes the VM service URI of the
    app to a file.
-2. The agent starts `flutter_peek_mcp`. The server reads the file and
-   connects. If the app is not running yet, the server tries again every
-   second.
+2. The agent starts `flutter_peek_mcp`. The server reads the URI file if
+   there is one. Otherwise it asks the Dart Tooling Daemon for the app that
+   was started in the agent's project folder. It connects, and if the app is
+   not running yet, it tries again every second.
 3. The server subscribes to the `Stdout`, `Stderr` and `Logging` streams. It
    also turns on the `dart:io` HTTP profiler (the data source of the DevTools
    Network tab) and reads it every 1.5 seconds.
@@ -50,6 +53,9 @@ does two things in the app: it turns on the HTTP profiler, and it calls
   3.5 to 3.9, install with `dart pub global activate` instead.
 - The app must run in **debug** or **profile** mode. Release builds have no VM
   service.
+- Flutter 3.44 or later (Dart 3.12) to find the app without a flag. With
+  older versions, run the app with `--vmservice-out-file`. See
+  [Run your app](#3-run-your-app).
 - Android, iOS, macOS, Windows and Linux. Emulators, simulators and physical
   devices all work, because `flutter run` forwards the VM service to your
   computer.
@@ -118,10 +124,21 @@ Run `/mcp` in Claude Code to make sure that `flutter-peek` is connected.
 **Other MCP clients**: start the `flutter_peek_mcp` command with the stdio
 transport.
 
-### 3. Run your app with `--vmservice-out-file`
+### 3. Run your app
 
-The server finds the app through a file that contains the VM service URI.
-Tell `flutter run` to write that file:
+With Flutter 3.44 or later, run the app as usual, with `flutter run` or from
+your IDE. The server finds it through the Dart Tooling Daemon that
+`flutter run` starts. It takes the app that was started in the agent's
+project folder or in a folder inside it, such as `example/app` in a
+monorepo. Apps started in other folders are never picked automatically.
+
+**Several apps of the same project** (for example, on an iOS simulator and
+an Android emulator): the server does not guess. `is_app_connected` lists
+them, and the agent calls `connect` with the one you mean.
+
+**Flutter older than 3.44, or to choose the app yourself:** tell
+`flutter run` to write the VM service URI to a file. When this file exists
+and its app is running, the server uses it first:
 
 ```bash
 flutter run --vmservice-out-file=/tmp/flutter_peek_vmservice.txt
@@ -160,9 +177,9 @@ Go to **Run → Edit Configurations… → Additional run args**, and add
 That is all. The server finds the app and connects again after a hot restart
 or a full restart.
 
-**No flag?** If the app is already running (for example, after
-`flutter attach`, which does not have `--vmservice-out-file`), ask the agent
-to connect to the VM service URI. `flutter run` and `flutter attach` print it
+**Not found?** If the server can't find the app (for example, after
+`flutter attach` with an older Flutter), ask the agent to connect to the VM
+service URI. `flutter run` and `flutter attach` print it
 as `A Dart VM Service on … is available at: http://127.0.0.1:PORT/TOKEN=/`.
 The agent calls the `connect` tool with that URI. A DevTools URL also works.
 
@@ -396,6 +413,11 @@ to the model provider.
   response can contain text that looks like instructions. The server tells the
   agent to treat this content as data, but you should still review what the
   agent does after it reads them.
+- To find the app, the server reads the Dart Tooling Daemon files in your
+  Dart data folder (`~/Library/Application Support/Dart/dtd` on macOS,
+  `~/.local/state/Dart/dtd` on Linux, `%LOCALAPPDATA%\Dart\dtd` on Windows)
+  and asks each local daemon for its apps. Turn this off with
+  `--no-discover`.
 - The VM service URI contains a secret token. Anybody who has the URI can run
   code in your debug app. The URI file in `/tmp` can be read by other users of
   the same computer. On a shared computer, put the file in a private
@@ -411,6 +433,9 @@ to the model provider.
 --uri-file=<path>         File that `flutter run --vmservice-out-file` writes
                           to. Default: /tmp/flutter_peek_vmservice.txt
                           (%TEMP% on Windows). Also: FLUTTER_PEEK_URI_FILE.
+--[no-]discover           When the URI file is missing or stale, find the app
+                          through the Dart Tooling Daemon (default: on).
+                          Needs Flutter 3.44 or later.
 --noise=<path>            File with extra URL patterns to hide, one per line.
                           A "regex:" prefix makes a regular expression, and
                           "#" starts a comment.
@@ -418,8 +443,10 @@ to the model provider.
 --version, --help
 ```
 
-Example: two apps at the same time. Give each project its own URI file, both
-in `flutter run` and in that project's `.mcp.json`:
+Example: two apps at the same time. With Flutter 3.44 or later, start each
+app in its own project folder, and each agent finds the app of its project.
+With the URI file, give each project its own file, both in `flutter run` and
+in that project's `.mcp.json`:
 
 ```json
 {
@@ -446,14 +473,19 @@ in `flutter run` and in that project's `.mcp.json`:
   app turns on the profiler itself. See
   [Requests made at startup](#http).
 - **One app per server.** The server connects to the main isolate of one app.
-  To watch two apps, use two URI files. See [Options](#options).
+  To watch two apps, run an agent in each project folder, or use two URI
+  files. See [Options](#options).
 
 ## Troubleshooting
 
-**`connected: false`, "No VM service URI file"**: the app was started
-without `--vmservice-out-file`, or with a different path than `--uri-file`.
-Restart the app with the flag, or ask the agent to `connect` to the URI that
-`flutter run` printed.
+**`connected: false`, "No running app found"**: the app is not running, it
+was started in another folder (the error lists the apps in other folders), or
+Flutter is older than 3.44 and the app was started without
+`--vmservice-out-file`. Start the app from the project folder, add the flag,
+or ask the agent to `connect` to the URI that `flutter run` printed.
+
+**"Found 2 running apps for this project"**: ask the agent to `connect` to
+the one you want. The error lists them with their devices.
 
 **`flutter_peek_mcp: command not found` when the agent starts the server**:
 agents often start servers without your shell `PATH`. Use the full path of

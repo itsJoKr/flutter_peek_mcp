@@ -4,10 +4,13 @@ library;
 import 'dart:async';
 import 'dart:io';
 
+import 'package:flutter_peek_mcp/src/dtd_discovery.dart';
 import 'package:flutter_peek_mcp/src/models.dart';
 import 'package:flutter_peek_mcp/src/vm_client.dart';
 import 'package:test/test.dart';
 import 'package:vm_service/vm_service_io.dart';
+
+import 'fixtures/fake_dtd.dart';
 
 /// Runs test/fixtures/sample_app.dart with the VM service (and DDS) enabled
 /// and checks what VmClient captures from it.
@@ -90,6 +93,117 @@ void main() {
     expect(vm.logs.where((l) => l.text == firstLine).length, countBefore);
     final profileIds = vm.httpRequests.map((e) => e.profileId).toList();
     expect(profileIds.toSet().length, profileIds.length);
+  });
+
+  group('without a URI file', () {
+    late Directory dtdDir;
+    late String project;
+    late FakeDtd dtd;
+    final sep = Platform.pathSeparator;
+
+    Future<VmClient> clientFindingApps({String? uriFile}) async {
+      final client = VmClient(
+        uriFilePath: uriFile ?? '${temp.path}${sep}missing.txt',
+        discovery: DtdDiscovery(
+          directory: dtdDir.path,
+          workingDirectory: project,
+        ),
+      );
+      addTearDown(client.dispose);
+      return client;
+    }
+
+    setUp(() async {
+      dtdDir = await Directory('${temp.path}${sep}dtd').create();
+      project = '${temp.path}${sep}project';
+    });
+
+    tearDown(() async {
+      await dtd.stop();
+      await dtdDir.delete(recursive: true);
+    });
+
+    test('finds the app through the Dart Tooling Daemon', () async {
+      dtd = await FakeDtd.start(
+        directory: dtdDir,
+        workspaceRoot: project,
+        vmServices: [
+          {'uri': vm.connectedUri!, 'name': 'Kind: Dart - Package: sample'},
+        ],
+      );
+      final client = await clientFindingApps();
+
+      await client.ensureConnected();
+
+      expect(client.connectedUri, vm.connectedUri);
+      expect(client.uriSource, 'Dart Tooling Daemon');
+      expect(client.appName, 'Kind: Dart - Package: sample');
+    });
+
+    test('looks past a URI file left behind by a stopped app', () async {
+      dtd = await FakeDtd.start(
+        directory: dtdDir,
+        workspaceRoot: project,
+        vmServices: [
+          {'uri': vm.connectedUri!},
+        ],
+      );
+      final stale = File('${temp.path}${sep}stale.txt');
+      final closed = await ServerSocket.bind(InternetAddress.loopbackIPv4, 0);
+      await stale.writeAsString('http://127.0.0.1:${closed.port}/gone=/');
+      await closed.close();
+      final client = await clientFindingApps(uriFile: stale.path);
+
+      await client.ensureConnected();
+
+      expect(client.connectedUri, vm.connectedUri);
+      expect(client.uriSource, 'Dart Tooling Daemon');
+    });
+
+    test('lists several apps of the project instead of picking one', () async {
+      dtd = await FakeDtd.start(
+        directory: dtdDir,
+        workspaceRoot: project,
+        vmServices: [
+          {'uri': vm.connectedUri!, 'name': 'Kind: Flutter - Device: iPhone'},
+          {
+            'uri': 'ws://127.0.0.1:1/other=/ws',
+            'name': 'Kind: Flutter - Device: Pixel'
+          },
+        ],
+      );
+      final client = await clientFindingApps();
+
+      await expectLater(
+        client.ensureConnected(),
+        throwsA(isA<VmConnectionException>()
+            .having(
+                (e) => e.message, 'message', contains('Found 2 running apps'))
+            .having((e) => e.message, 'message', contains('Device: Pixel'))
+            .having((e) => e.message, 'message', contains(vm.connectedUri!))),
+      );
+      expect(client.isConnected, isFalse);
+    });
+
+    test('names apps running in other folders but does not connect', () async {
+      dtd = await FakeDtd.start(
+        directory: dtdDir,
+        workspaceRoot: '${temp.path}${sep}other_project',
+        vmServices: [
+          {'uri': vm.connectedUri!, 'name': 'Kind: Dart - Package: other'},
+        ],
+      );
+      final client = await clientFindingApps();
+
+      await expectLater(
+        client.ensureConnected(),
+        throwsA(isA<VmConnectionException>()
+            .having(
+                (e) => e.message, 'message', contains('No running app found'))
+            .having((e) => e.message, 'message', contains('Package: other'))),
+      );
+      expect(client.isConnected, isFalse);
+    });
   });
 
   test('does not hang while the app is paused at a breakpoint', () async {

@@ -1,3 +1,13 @@
+## Unreleased
+
+- Finds the app without `--vmservice-out-file`. With Flutter 3.44 or later,
+  `flutter run` starts a Dart Tooling Daemon, and the server asks it for the
+  app that was started in the agent's project folder. With several apps of
+  the project, the agent picks one with `connect` instead of the server
+  guessing. The URI file still comes first when its app is running.
+- `is_app_connected` and `connect` return the app's name, with its device.
+- New `--[no-]discover` option.
+
 ## 1.0.0
 
 - First public release.

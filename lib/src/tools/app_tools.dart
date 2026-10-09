@@ -35,6 +35,7 @@ ToolDef isAppConnectedTool(VmClient vm) => ToolDef(
           'connected': vm.isConnected,
           'nowMs': DateTime.now().millisecondsSinceEpoch,
           if (vm.connectedUri != null) 'vmServiceUri': vm.connectedUri,
+          if (vm.appName != null) 'appName': vm.appName,
           'uriSource': vm.uriSource,
           'bufferedLogs': vm.logs.length,
           'bufferedHttpRequests': vm.httpRequests.length,
@@ -47,9 +48,10 @@ ToolDef connectTool(VmClient vm) => ToolDef(
       name: 'connect',
       description: 'Connect to a specific Dart VM service URI, such as the '
           '"A Dart VM Service on … is available at: http://127.0.0.1:PORT/TOKEN=/" '
-          'line that `flutter run` prints, or a DevTools URL. Use this when the '
-          'app was started without --vmservice-out-file. Call with no uri to go '
-          'back to reading the URI file.',
+          'line that `flutter run` prints, a DevTools URL, or a URI listed in an '
+          'is_app_connected error. Use this when the app is not found '
+          'automatically, or several apps are running. Call with no uri to go '
+          'back to finding the app automatically.',
       readOnly: false,
       inputSchema: {
         'type': 'object',
@@ -65,6 +67,7 @@ ToolDef connectTool(VmClient vm) => ToolDef(
         return {
           'connected': vm.isConnected,
           'vmServiceUri': vm.connectedUri,
+          if (vm.appName != null) 'appName': vm.appName,
           'uriSource': vm.uriSource,
         };
       },

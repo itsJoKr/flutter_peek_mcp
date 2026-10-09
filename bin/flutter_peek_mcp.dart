@@ -22,6 +22,14 @@ Future<void> main(List<String> arguments) async {
       defaultsTo:
           Platform.environment['FLUTTER_PEEK_URI_FILE'] ?? _defaultUriFile(),
     )
+    ..addFlag(
+      'discover',
+      help: 'When the URI file is missing or stale, find the app through the '
+          'Dart Tooling Daemon that `flutter run` starts (Flutter 3.44 or '
+          'later). Apps started in the current folder or below it are '
+          'preferred.',
+      defaultsTo: true,
+    )
     ..addOption(
       'noise',
       help: 'File with extra URL patterns to hide from HTTP tools, one per '
@@ -63,6 +71,7 @@ Future<void> main(List<String> arguments) async {
 
   final vm = VmClient(
     uriFilePath: args.option('uri-file')!,
+    discovery: args.flag('discover') ? DtdDiscovery() : null,
     redactHeaders: args.flag('redact-headers'),
   )..startBackgroundReconnect();
 

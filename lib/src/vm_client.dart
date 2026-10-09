@@ -6,6 +6,7 @@ import 'dart:io';
 import 'package:vm_service/vm_service.dart';
 import 'package:vm_service/vm_service_io.dart';
 
+import 'dtd_discovery.dart';
 import 'models.dart';
 import 'redaction.dart';
 import 'vm_uri.dart';
@@ -32,6 +33,9 @@ const _binaryContentTypes = [
 ];
 const _maxPrefetchBytes = 1024 * 1024;
 
+const _viaConnectTool = 'connect tool';
+const _viaDtd = 'Dart Tooling Daemon';
+
 /// The app's VM service can't be found or reached. The message says why and
 /// how to fix it.
 class VmConnectionException implements Exception {
@@ -45,16 +49,23 @@ class VmConnectionException implements Exception {
 /// Connects to a running Flutter app through the Dart VM service and keeps
 /// rolling in-memory buffers of its console output and HTTP traffic.
 ///
+/// The app is found through the URI file that `flutter run --vmservice-out-file`
+/// writes. When that file is missing or stale, [discovery] asks the Dart
+/// Tooling Daemon, which knows every app that `flutter run` started.
+///
 /// The connection heals itself. A hot restart replaces the app's isolate, which
-/// is picked up from isolate events. A full restart writes a new VM service URI,
-/// which the background reconnect loop picks up. Buffers survive both, so the
-/// output of a crashed app can still be inspected.
+/// is picked up from isolate events. A full restart starts a new VM service,
+/// which the background reconnect loop finds again. Buffers survive both, so
+/// the output of a crashed app can still be inspected.
 ///
 /// Console history from before the connection is recovered for free: DDS (which
 /// `flutter run` always starts) replays its buffered Stdout, Stderr and Logging
 /// events to each new subscriber.
 class VmClient {
   final String uriFilePath;
+
+  /// Finds the app when the URI file doesn't lead to it. Null turns this off.
+  final DtdDiscovery? discovery;
   final bool redactHeaders;
   final int maxLogs;
   final int maxHttp;
@@ -63,6 +74,7 @@ class VmClient {
 
   VmClient({
     required this.uriFilePath,
+    this.discovery,
     this.redactHeaders = true,
     this.maxLogs = 2000,
     this.maxHttp = 500,
@@ -73,6 +85,8 @@ class VmClient {
   VmService? _service;
   String? _isolateId;
   String? _connectedUri;
+  String? _connectedVia;
+  String? _appName;
   String? _manualUri;
   Future<void>? _connecting;
   String? _lastError;
@@ -99,8 +113,20 @@ class VmClient {
   String? get connectedUri => _connectedUri;
   String? get lastError => _lastError;
 
-  /// Where the next connection attempt reads its URI from.
-  String get uriSource => _manualUri != null ? 'connect tool' : uriFilePath;
+  /// The name the Dart Tooling Daemon gave the connected app, for example
+  /// `Kind: Flutter - Device: macOS - Package: aisle`.
+  String? get appName => _appName;
+
+  /// Where the current connection came from or, while disconnected, where the
+  /// next attempt looks.
+  String get uriSource {
+    final via = _connectedVia;
+    if (via != null) return via;
+    if (_manualUri != null) return _viaConnectTool;
+    return discovery == null
+        ? uriFilePath
+        : '$uriFilePath, then the Dart Tooling Daemon';
+  }
 
   List<LogEntry> get logs => List.unmodifiable(_logs);
   List<HttpEntry> get httpRequests => List.unmodifiable(_http.values);
@@ -134,8 +160,8 @@ class VmClient {
     await _disconnect();
   }
 
-  /// Connects to [uri] instead of the URI file. A null or empty [uri] goes
-  /// back to the URI file.
+  /// Connects to [uri] instead of finding the app. A null or empty [uri] goes
+  /// back to finding it through the URI file and the Dart Tooling Daemon.
   Future<void> connectTo(String? uri) async {
     final trimmed = uri?.trim();
     _manualUri = (trimmed == null || trimmed.isEmpty) ? null : trimmed;
@@ -197,7 +223,76 @@ class VmClient {
   }
 
   Future<void> _connect() async {
-    final wsUri = toWebSocketUri(await _resolveUri());
+    final manual = _manualUri;
+    if (manual != null) return _connectTo(manual, via: _viaConnectTool);
+
+    final fromFile = await _readUriFile();
+    final discovery = this.discovery;
+    if (discovery == null) {
+      if (fromFile == null) throw VmConnectionException(_noUriFileMessage());
+      return _connectTo(fromFile, via: uriFilePath);
+    }
+
+    var staleFile = false;
+    if (fromFile != null) {
+      try {
+        return await _connectTo(fromFile, via: uriFilePath);
+      } on VmConnectionException {
+        // Usually left behind by an app that has stopped.
+        staleFile = true;
+      }
+    }
+    final app = await _discoverApp(discovery, staleFile: staleFile);
+    await _connectTo(app.vmServiceUri, via: _viaDtd, appName: app.name);
+  }
+
+  /// Picks the app of this project. Several candidates, or none, is an error
+  /// that lists what was found, so the agent can call `connect` with the
+  /// right URI instead of flutter-peek guessing.
+  Future<DiscoveredApp> _discoverApp(
+    DtdDiscovery discovery, {
+    required bool staleFile,
+  }) async {
+    final apps = await discovery.findApps();
+    List<DiscoveredApp> matching(WorkspaceMatch match) =>
+        apps.where((a) => a.match == match).toList();
+
+    final inProject = matching(WorkspaceMatch.project);
+    final candidates =
+        inProject.isNotEmpty ? inProject : matching(WorkspaceMatch.parent);
+    if (candidates.length == 1) return candidates.single;
+    if (candidates.length > 1) {
+      throw VmConnectionException(
+        'Found ${candidates.length} running apps for this project. Call the '
+        '`connect` tool with the URI of the one to watch:\n'
+        '${_listApps(candidates)}',
+      );
+    }
+
+    final elsewhere = matching(WorkspaceMatch.none);
+    throw VmConnectionException([
+      if (staleFile)
+        'The URI file $uriFilePath belongs to an app that is no longer running.',
+      'No running app found for ${discovery.workingDirectory}. Start it with '
+          '`flutter run`. Flutter 3.44 and later are found automatically; '
+          'with older versions, add `--vmservice-out-file=$uriFilePath`. Or '
+          'call the `connect` tool with the VM service URI that `flutter run` '
+          'prints.',
+      if (elsewhere.isNotEmpty)
+        'Apps running in other folders (call `connect` with a URI to watch '
+            'one):\n${_listApps(elsewhere)}',
+    ].join(' '));
+  }
+
+  String _listApps(List<DiscoveredApp> apps) =>
+      apps.map((a) => '- ${a.describe()}').join('\n');
+
+  Future<void> _connectTo(
+    String uri, {
+    required String via,
+    String? appName,
+  }) async {
+    final wsUri = toWebSocketUri(uri);
     final VmService service;
     try {
       service =
@@ -210,6 +305,8 @@ class VmClient {
     }
     _service = service;
     _connectedUri = wsUri;
+    _connectedVia = via;
+    _appName = appName;
     _occurrences.clear();
 
     try {
@@ -241,24 +338,18 @@ class VmClient {
     await _adoptMainIsolate();
   }
 
-  Future<String> _resolveUri() async {
-    final manual = _manualUri;
-    if (manual != null) return manual;
-
+  /// The URI in the URI file, or null when there is no file or it is empty.
+  Future<String?> _readUriFile() async {
     final file = File(uriFilePath);
-    if (!await file.exists()) {
-      throw VmConnectionException(
-        'No VM service URI file at $uriFilePath. Start the app with '
-        '`flutter run --vmservice-out-file=$uriFilePath`, or call the '
-        '`connect` tool with the VM service URI that `flutter run` prints.',
-      );
-    }
+    if (!await file.exists()) return null;
     final contents = await file.readAsString();
-    if (contents.trim().isEmpty) {
-      throw VmConnectionException('$uriFilePath is empty.');
-    }
-    return parseUriFile(contents);
+    return contents.trim().isEmpty ? null : parseUriFile(contents);
   }
+
+  String _noUriFileMessage() =>
+      'No VM service URI file at $uriFilePath. Start the app with '
+      '`flutter run --vmservice-out-file=$uriFilePath`, or call the '
+      '`connect` tool with the VM service URI that `flutter run` prints.';
 
   Future<void> _adoptMainIsolate() async {
     final service = _service;
@@ -659,6 +750,8 @@ class VmClient {
     _service = null;
     _isolateId = null;
     _connectedUri = null;
+    _connectedVia = null;
+    _appName = null;
     try {
       await service?.dispose();
     } catch (_) {
