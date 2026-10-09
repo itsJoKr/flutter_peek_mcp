@@ -44,5 +44,16 @@ opens it with `get_http_request`, and reads the error in the response body.
 Then it calls `get_context_around` with that request id to see the logs from
 the same moment.
 
+## Try it on a demo app
+
+[Aisle](https://github.com/itsJoKr/flutter_peek_mcp/tree/main/example/aisle) is
+a small Flutter shop with two bugs on purpose, and a prompt for each:
+
+- An error in the app. The agent explains it from the console and the HTTP
+  traffic.
+- A bug report without an error. The agent adds logs, runs the app,
+  reproduces the bug with [marionette](https://pub.dev/packages/marionette_cli),
+  and reads its logs with flutter-peek.
+
 See the [README](https://github.com/itsJoKr/flutter_peek_mcp#readme) for all
 tools and options.

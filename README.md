@@ -175,6 +175,10 @@ Talk to the agent in plain language. It selects the tools. Some examples:
 - "Find the last exception in the logs and tell me what caused it."
 - "What did the app log and request in the 5 seconds before that 500?"
 
+To try these on a real app, see
+[Aisle](https://github.com/itsJoKr/flutter_peek_mcp/tree/main/example/aisle), a
+demo shop app with two bugs on purpose and a prompt for each.
+
 ### Reproduce a bug with a clean buffer
 
 1. Ask the agent to clear the flutter-peek buffers (`clear_buffers`).

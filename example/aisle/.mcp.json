@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "flutter-peek": {
+      "command": "dart",
+      "args": ["run", "../../bin/flutter_peek_mcp.dart"]
+    }
+  }
+}
